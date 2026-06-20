@@ -9,6 +9,7 @@ add_library(ImGuiFileDialog STATIC
 )
 
 target_include_directories(ImGuiFileDialog PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(ImGuiFileDialog PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../imgui)
 
 if(UNIX)
     target_compile_options(ImGuiFileDialog PUBLIC "-Wno-unknown-pragmas")

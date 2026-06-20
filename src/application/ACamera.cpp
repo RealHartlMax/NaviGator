@@ -8,14 +8,17 @@
 
 ASceneCamera::ASceneCamera() : mNearPlane(1.0f), mFarPlane(1000000.f), mFovy(glm::radians(60.f)),
     mCenter(ZERO), mEye(ZERO), mPitch(0.f), mYaw(glm::half_pi<float>()), mUp(UNIT_Y), mRight(-UNIT_X), mForward(UNIT_Z),
-    mAspectRatio(16.f / 9.f), mMoveSpeed(1000.f), mMouseSensitivity(0.25f), mZoomLevel(1.0f)
+	mAspectRatio(16.f / 9.f), mMoveSpeed(1000.f), mMouseSensitivity(0.0035f), mZoomLevel(1.0f),
+	mAcceptKeyboardInput(false), mAcceptMouseInput(false)
 {
 	mCenter = mEye - mForward;
 }
 
-void ASceneCamera::Update(float deltaTime, float screenWidth, float screenHeight) {
+void ASceneCamera::Update(float deltaTime, float screenWidth, float screenHeight, bool acceptKeyboardInput, bool acceptMouseInput) {
 	mScreenWidth = screenWidth;
 	mScreenHeight = screenHeight;
+	mAcceptKeyboardInput = acceptKeyboardInput;
+	mAcceptMouseInput = acceptMouseInput;
 
 	if (mViewMode == CAM_VIEW_PROJ) {
 		ProcessInputProjection(deltaTime);
@@ -27,33 +30,42 @@ void ASceneCamera::Update(float deltaTime, float screenWidth, float screenHeight
 
 void ASceneCamera::ProcessInputProjection(float deltaTime) {
 	glm::vec3 moveDir = glm::zero<glm::vec3>();
+	const ImGuiIO& io = ImGui::GetIO();
 
-	if (ImGui::IsKeyDown(ImGuiKey_W)) // Forward
+	if (mAcceptKeyboardInput && ImGui::IsKeyDown(ImGuiKey_W)) // Forward
 		moveDir -= mForward;
-	if (ImGui::IsKeyDown(ImGuiKey_S)) // Backward
+	if (mAcceptKeyboardInput && ImGui::IsKeyDown(ImGuiKey_S)) // Backward
 		moveDir += mForward;
-	if (ImGui::IsKeyDown(ImGuiKey_D)) // Right
+	if (mAcceptKeyboardInput && ImGui::IsKeyDown(ImGuiKey_D)) // Right
 		moveDir -= mRight;
-	if (ImGui::IsKeyDown(ImGuiKey_A)) // Left
+	if (mAcceptKeyboardInput && ImGui::IsKeyDown(ImGuiKey_A)) // Left
 		moveDir += mRight;
 
-	if (ImGui::IsKeyDown(ImGuiKey_Q)) // Up
+	if (mAcceptKeyboardInput && ImGui::IsKeyDown(ImGuiKey_Q)) // Up
 		moveDir -= UNIT_Y;
-	if (ImGui::IsKeyDown(ImGuiKey_E)) // Down
+	if (mAcceptKeyboardInput && ImGui::IsKeyDown(ImGuiKey_E)) // Down
 		moveDir += UNIT_Y;
 
-	mMoveSpeed += ImGui::GetIO().MouseWheel * 10000 * deltaTime;
+	if (mAcceptMouseInput) {
+		mMoveSpeed += io.MouseWheel * 500.0f;
+	}
 	mMoveSpeed = std::clamp(mMoveSpeed, 100.f, 50000.f);
 	float actualMoveSpeed = ImGui::IsKeyDown(ImGuiKey_LeftShift) ? mMoveSpeed * 10.f : mMoveSpeed;
 
-	// Step-wise rotation
-	if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
-		Rotate(deltaTime, 0.25f, ImGui::GetMouseDragDelta(ImGuiMouseButton_Right));
-		ImGui::ResetMouseDragDelta(ImGuiMouseButton_Right);
+	// RMB: look around (standard flycam controls)
+	if (mAcceptMouseInput && ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+		float lookSensitivity = mMouseSensitivity;
+		if (ImGui::IsKeyDown(ImGuiKey_LeftAlt) || ImGui::IsKeyDown(ImGuiKey_RightAlt)) {
+			lookSensitivity *= 0.35f;
+		}
+		Rotate(lookSensitivity, io.MouseDelta);
 	}
-	// Smooth rotation
-	else if (ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
-		Rotate(deltaTime, 0.05f, ImGui::GetMouseDragDelta(ImGuiMouseButton_Middle));
+	// MMB: pan camera parallel to view plane
+	else if (mAcceptMouseInput && ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+		const float panScale = std::max(1.0f, actualMoveSpeed * 0.0015f);
+		glm::vec3 pan = (-mRight * io.MouseDelta.x + mUp * io.MouseDelta.y) * panScale;
+		mEye += pan;
+		mCenter += pan;
 	}
 
 	if (glm::length(moveDir) != 0.f)
@@ -84,18 +96,20 @@ void ASceneCamera::ProcessInputOrthographic(float deltaTime) {
 		ImGui::ResetMouseDragDelta(ImGuiMouseButton_Middle);
 	}
 
-	mZoomLevel += ImGui::GetIO().MouseWheel * 100.0f * deltaTime;
+	if (mAcceptMouseInput) {
+		mZoomLevel += ImGui::GetIO().MouseWheel * 100.0f * deltaTime;
+	}
 	if (mZoomLevel < 0.5f) {
 		mZoomLevel = 0.5f;
 	}
 }
 
-void ASceneCamera::Rotate(float deltaTime, float sensitivity, ImVec2 mouseDelta) {
+void ASceneCamera::Rotate(float sensitivity, ImVec2 mouseDelta) {
 	if (mouseDelta.x == 0.f && mouseDelta.y == 0.f)
 		return;
 
-	mPitch += mouseDelta.y * deltaTime * sensitivity;
-	mYaw += mouseDelta.x * deltaTime * sensitivity;
+	mPitch += mouseDelta.y * sensitivity;
+	mYaw += mouseDelta.x * sensitivity;
 
 	mPitch = std::clamp(mPitch, LOOK_UP_MIN, LOOK_UP_MAX);
 

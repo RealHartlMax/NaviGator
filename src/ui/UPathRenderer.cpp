@@ -190,11 +190,11 @@ void CPathRenderer::UpdateData() {
     mRenderPathSize = points.size();
 
     glBindBuffer(GL_ARRAY_BUFFER, mVbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(CPathPoint) * points.size(), &points[0], GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(CPathPoint) * points.size(), points.empty() ? nullptr : points.data(), GL_DYNAMIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     glBindBuffer(GL_ARRAY_BUFFER, mPointsVbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(CPathPoint) * mPath.size() * 3, &circles[0], GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(CPathPoint) * circles.size(), circles.empty() ? nullptr : circles.data(), GL_DYNAMIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 

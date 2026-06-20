@@ -13,12 +13,14 @@
 #include <pugixml.hpp>
 #include <glad/glad.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include "util/ImGuizmo.hpp"
 
 #include <iostream>
 #include <algorithm>
-#include <format>
 #include <limits>
+#include <unordered_map>
+#include <unordered_set>
 
 constexpr const char* TRACKS_CHILD_NAME = "train_tracks";
 constexpr const char* TRACKS_FILE_NAME = "traintracks.xml";
@@ -27,16 +29,62 @@ constexpr const char* NEW_TRACK_DIALOG_LABEL = "New Track";
 constexpr uint32_t VERTEX_ATTRIB_INDEX = 0;
 
 constexpr glm::vec4 NORMAL_COLOR = { 0.00f, 0.25f, 0.75f, 1.0f };
+constexpr glm::vec4 JUNCTION_COLOR = { 0.15f, 0.85f, 0.25f, 1.0f };
+constexpr glm::vec4 STATION_COLOR = { 0.95f, 0.85f, 0.20f, 1.0f };
 constexpr glm::vec4 HIGHLIGHT_COLOR = { 1.0f, 0.5f, 0.0f, 1.0f };
 constexpr glm::vec4 SELECTED_COLOR = { 1.0f, 0.1f, 0.2f, 1.0f };
 constexpr glm::vec4 HANDLE_COLOR = { 1.0f, 0.5f, 1.0f, 1.0f };
 
 constexpr uint32_t HANDLE_A_MASK = 0x40000000;
 constexpr uint32_t HANDLE_B_MASK = 0x80000000;
+constexpr float CURVE_HANDLE_SCALE = 1.0f / 3.0f;
+
+namespace {
+    bool RenderMixedCheckbox(const char* label, bool* value, bool mixed) {
+        if (mixed) {
+            ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
+        }
+
+        const bool changed = ImGui::Checkbox(label, value);
+
+        if (mixed) {
+            ImGui::PopItemFlag();
+        }
+
+        return changed;
+    }
+
+    glm::vec3 BuildHandleDirection(const glm::vec3& position, const glm::vec3* previousPosition, const glm::vec3* nextPosition) {
+        if (previousPosition != nullptr && nextPosition != nullptr) {
+            const glm::vec3 tangent = *nextPosition - *previousPosition;
+            if (glm::length(tangent) > 0.0001f) {
+                return glm::normalize(tangent);
+            }
+        }
+
+        if (nextPosition != nullptr) {
+            const glm::vec3 tangent = *nextPosition - position;
+            if (glm::length(tangent) > 0.0001f) {
+                return glm::normalize(tangent);
+            }
+        }
+
+        if (previousPosition != nullptr) {
+            const glm::vec3 tangent = position - *previousPosition;
+            if (glm::length(tangent) > 0.0001f) {
+                return glm::normalize(tangent);
+            }
+        }
+
+        return glm::vec3(1.0f, 0.0f, 0.0f);
+    }
+}
 
 ATrackContext::ATrackContext() : mPntVBO(0), mPntIBO(0), mPntVAO(0), mSimpleProgram(0), bGLInitialized(false), mBaseColorUniform(0),
     mSelectedTrack(), mSelectedPickType(ETrackNodePickType::Position), bSelectingJunctionPartner(false), mPendingNewTrackName(""),
-    bTrackDialogOpen(false), bCanDuplicatePoint(true)
+    bTrackDialogOpen(false), bCanDuplicatePoint(true), bWasUsingGizmo(false), bBoxSelecting(false), bBoxSelectionActive(false),
+    bBoxSelectionRequireFullContainment(false), mBoxSelectionNodePickRadius(10.0f),
+    mBoxSelectionStartScreen(glm::zero<glm::vec2>()), mBoxSelectionEndScreen(glm::zero<glm::vec2>())
 {
 
 }
@@ -188,6 +236,346 @@ void ATrackContext::LoadTracks(std::filesystem::path filePath) {
     }
 
     PostprocessNodes();
+
+    mUndoStack.clear();
+    mRedoStack.clear();
+}
+
+ATrackContext::AEditorSnapshot ATrackContext::CaptureSnapshot() const {
+    AEditorSnapshot snapshot;
+    snapshot.PickType = mSelectedPickType;
+    snapshot.Selection = mSelectedPoints;
+    snapshot.Tracks.reserve(mTracks.size());
+
+    std::unordered_map<const UTracks::UTrackPoint*, std::pair<int, int>> pointToIndex;
+    for (size_t trackIdx = 0; trackIdx < mTrackPoints.size(); trackIdx++) {
+        for (size_t pointIdx = 0; pointIdx < mTrackPoints[trackIdx].size(); pointIdx++) {
+            pointToIndex[mTrackPoints[trackIdx][pointIdx].get()] = { int(trackIdx), int(pointIdx) };
+        }
+    }
+
+    for (size_t trackIdx = 0; trackIdx < mTracks.size(); trackIdx++) {
+        ATrackState trackState;
+        trackState.ConfigName = mTracks[trackIdx]->GetConfigName();
+        trackState.GameFilename = mTracks[trackIdx]->GetGameFilename();
+        trackState.StopsAtStations = *mTracks[trackIdx]->GetStopsAtStationsForEditor();
+        trackState.Loops = *mTracks[trackIdx]->GetLoopsForEditor();
+        trackState.Hidden = mTracks[trackIdx]->IsHidden();
+        trackState.BrakingDist = *mTracks[trackIdx]->GetBrakingDistForEditor();
+
+        trackState.Points.reserve(mTrackPoints[trackIdx].size());
+        for (size_t pointIdx = 0; pointIdx < mTrackPoints[trackIdx].size(); pointIdx++) {
+            const std::shared_ptr<UTracks::UTrackPoint>& point = mTrackPoints[trackIdx][pointIdx];
+
+            APointState pointState;
+            pointState.Position = point->GetPosition();
+            pointState.HandleA = point->GetHandleA();
+            pointState.HandleB = point->GetHandleB();
+            pointState.Scalar = *point->GetScalarForEditor();
+            pointState.StationType = point->GetStationType();
+            pointState.IsTunnel = *point->GetIsTunnelForEditor();
+            pointState.IsJunction = *point->GetIsJunctionForEditor();
+            pointState.IsCurve = point->IsCurve();
+            pointState.Argument = point->GetArgument();
+            pointState.ParentTrackName = point->GetParentTrackName();
+            pointState.JunctionTrackIdx = -1;
+            pointState.JunctionPointIdx = -1;
+
+            if (point->HasJunctionPartner()) {
+                const std::shared_ptr<UTracks::UTrackPoint> partner = point->GetJunctionPartner().lock();
+                const auto found = pointToIndex.find(partner.get());
+                if (found != pointToIndex.end()) {
+                    pointState.JunctionTrackIdx = found->second.first;
+                    pointState.JunctionPointIdx = found->second.second;
+                }
+            }
+
+            trackState.Points.push_back(std::move(pointState));
+        }
+
+        snapshot.Tracks.push_back(std::move(trackState));
+    }
+
+    return snapshot;
+}
+
+void ATrackContext::SyncPathRenderersFromTrackPoints() {
+    for (size_t trackIdx = 0; trackIdx < mPathRenderers.size() && trackIdx < mTrackPoints.size(); trackIdx++) {
+        mPathRenderers[trackIdx]->mPath.clear();
+        mPathRenderers[trackIdx]->mPath.reserve(mTrackPoints[trackIdx].size());
+
+        for (const std::shared_ptr<UTracks::UTrackPoint>& point : mTrackPoints[trackIdx]) {
+            mPathRenderers[trackIdx]->mPath.push_back({ point->GetPosition(), { 1, 0, 0, 1 }, point->GetHandleA(), point->GetHandleB() });
+        }
+
+        mPathRenderers[trackIdx]->UpdateData();
+    }
+}
+
+void ATrackContext::SetCurveState(uint16_t trackIdx, uint16_t pointIdx, bool isCurve) {
+    if (trackIdx >= mTrackPoints.size() || pointIdx >= mTrackPoints[trackIdx].size()) {
+        return;
+    }
+
+    std::shared_ptr<UTracks::UTrackPoint> point = mTrackPoints[trackIdx][pointIdx];
+    *point->GetIsCurveForEditor() = isCurve;
+
+    if (isCurve) {
+        RecalculateCurveHandles(trackIdx, pointIdx);
+        return;
+    }
+
+    const glm::vec3& position = point->GetPosition();
+    point->GetHandleAForEditor() = position;
+    point->GetHandleBForEditor() = position;
+}
+
+void ATrackContext::RecalculateCurveHandles(uint16_t trackIdx, uint16_t pointIdx) {
+    if (trackIdx >= mTrackPoints.size() || pointIdx >= mTrackPoints[trackIdx].size()) {
+        return;
+    }
+
+    shared_vector<UTracks::UTrackPoint>& trackPoints = mTrackPoints[trackIdx];
+    std::shared_ptr<UTracks::UTrackPoint> point = trackPoints[pointIdx];
+    const glm::vec3& position = point->GetPosition();
+
+    if (trackPoints.size() < 2) {
+        point->GetHandleAForEditor() = position;
+        point->GetHandleBForEditor() = position;
+        return;
+    }
+
+    const bool loops = trackIdx < mTracks.size() && *mTracks[trackIdx]->GetLoopsForEditor();
+    const size_t currentIdx = pointIdx;
+    const size_t pointCount = trackPoints.size();
+
+    const bool hasPrevious = loops || currentIdx > 0;
+    const bool hasNext = loops || currentIdx + 1 < pointCount;
+
+    const glm::vec3* previousPosition = hasPrevious ? &trackPoints[(currentIdx + pointCount - 1) % pointCount]->GetPosition() : nullptr;
+    const glm::vec3* nextPosition = hasNext ? &trackPoints[(currentIdx + 1) % pointCount]->GetPosition() : nullptr;
+
+    const glm::vec3 handleDirection = BuildHandleDirection(position, previousPosition, nextPosition);
+
+    const float previousDistance = previousPosition != nullptr ? glm::distance(position, *previousPosition) : 0.0f;
+    const float nextDistance = nextPosition != nullptr ? glm::distance(position, *nextPosition) : 0.0f;
+
+    if (previousPosition != nullptr) {
+        point->GetHandleAForEditor() = position - handleDirection * (previousDistance * CURVE_HANDLE_SCALE);
+    }
+    else {
+        point->GetHandleAForEditor() = position;
+    }
+
+    if (nextPosition != nullptr) {
+        point->GetHandleBForEditor() = position + handleDirection * (nextDistance * CURVE_HANDLE_SCALE);
+    }
+    else {
+        point->GetHandleBForEditor() = position;
+    }
+}
+
+void ATrackContext::InsertNodeRelative(uint16_t trackIdx, uint16_t pointIdx, bool insertAfter) {
+    if (trackIdx >= mTrackPoints.size() || pointIdx >= mTrackPoints[trackIdx].size()) {
+        return;
+    }
+
+    const std::shared_ptr<UTracks::UTrackPoint>& sourcePoint = mTrackPoints[trackIdx][pointIdx];
+    std::shared_ptr<UTracks::UTrackPoint> newPoint = std::make_shared<UTracks::UTrackPoint>(sourcePoint->GetParentTrackName());
+
+    newPoint->SetPosition(sourcePoint->GetPosition());
+    newPoint->GetHandleAForEditor() = sourcePoint->GetHandleA();
+    newPoint->GetHandleBForEditor() = sourcePoint->GetHandleB();
+    *newPoint->GetScalarForEditor() = *sourcePoint->GetScalarForEditor();
+    newPoint->GetStationTypeForEditor() = sourcePoint->GetStationType();
+    *newPoint->GetIsTunnelForEditor() = *sourcePoint->GetIsTunnelForEditor();
+    *newPoint->GetIsCurveForEditor() = *sourcePoint->GetIsCurveForEditor();
+    *newPoint->GetIsJunctionForEditor() = false;
+    *newPoint->GetArgumentForEditor() = (sourcePoint->GetStationType() != UTracks::ENodeStationType::None) ? sourcePoint->GetArgument() : "";
+
+    const uint16_t insertIdx = insertAfter ? uint16_t(pointIdx + 1) : pointIdx;
+    mTrackPoints[trackIdx].insert(mTrackPoints[trackIdx].begin() + insertIdx, newPoint);
+
+    ClearSelectedPoints();
+    mSelectedPoints.push_back({ trackIdx, insertIdx });
+    newPoint->SetSelected(true);
+
+    SyncPathRenderersFromTrackPoints();
+}
+
+void ATrackContext::DeleteSelectedNode(uint16_t trackIdx, uint16_t pointIdx) {
+    if (trackIdx >= mTrackPoints.size() || pointIdx >= mTrackPoints[trackIdx].size()) {
+        return;
+    }
+
+    if (mTrackPoints[trackIdx].size() <= 1) {
+        return;
+    }
+
+    std::shared_ptr<UTracks::UTrackPoint> point = mTrackPoints[trackIdx][pointIdx];
+    if (point->HasJunctionPartner()) {
+        point->SetJunctionPartner(nullptr);
+    }
+
+    mTrackPoints[trackIdx].erase(mTrackPoints[trackIdx].begin() + pointIdx);
+
+    ClearSelectedPoints();
+    const uint16_t nextIdx = std::min<uint16_t>(pointIdx, uint16_t(mTrackPoints[trackIdx].size() - 1));
+    mSelectedPoints.push_back({ trackIdx, nextIdx });
+    mTrackPoints[trackIdx][nextIdx]->SetSelected(true);
+
+    SyncPathRenderersFromTrackPoints();
+}
+
+void ATrackContext::RestoreSnapshot(const AEditorSnapshot& snapshot) {
+    ClearSelectedPoints();
+    mTracks.clear();
+    mTrackPoints.clear();
+    mPathRenderers.clear();
+    mSelectedTrack.reset();
+
+    mTracks.reserve(snapshot.Tracks.size());
+    mTrackPoints.reserve(snapshot.Tracks.size());
+    mPathRenderers.reserve(snapshot.Tracks.size());
+
+    for (const ATrackState& trackState : snapshot.Tracks) {
+        std::shared_ptr<UTracks::UTrack> track = std::make_shared<UTracks::UTrack>();
+        *track->GetConfigNameForEditor() = trackState.ConfigName;
+        *track->GetGameFilenameForEditor() = trackState.GameFilename;
+        *track->GetStopsAtStationsForEditor() = trackState.StopsAtStations;
+        *track->GetLoopsForEditor() = trackState.Loops;
+        *track->GetBrakingDistForEditor() = trackState.BrakingDist;
+        track->SetHidden(trackState.Hidden);
+        mTracks.push_back(track);
+
+        shared_vector<UTracks::UTrackPoint> points;
+        points.reserve(trackState.Points.size());
+
+        for (const APointState& pointState : trackState.Points) {
+            std::shared_ptr<UTracks::UTrackPoint> point = std::make_shared<UTracks::UTrackPoint>(pointState.ParentTrackName);
+            point->SetPosition(pointState.Position);
+            point->GetHandleAForEditor() = pointState.HandleA;
+            point->GetHandleBForEditor() = pointState.HandleB;
+            *point->GetScalarForEditor() = pointState.Scalar;
+            point->GetStationTypeForEditor() = pointState.StationType;
+            *point->GetIsTunnelForEditor() = pointState.IsTunnel;
+            *point->GetIsJunctionForEditor() = pointState.IsJunction;
+            *point->GetIsCurveForEditor() = pointState.IsCurve;
+            *point->GetArgumentForEditor() = pointState.Argument;
+            point->SetSelected(false);
+
+            points.push_back(point);
+        }
+
+        mTrackPoints.push_back(std::move(points));
+
+        std::shared_ptr<CPathRenderer> pathRenderer = std::make_shared<CPathRenderer>();
+        pathRenderer->Init();
+        mPathRenderers.push_back(pathRenderer);
+    }
+
+    for (size_t trackIdx = 0; trackIdx < snapshot.Tracks.size(); trackIdx++) {
+        for (size_t pointIdx = 0; pointIdx < snapshot.Tracks[trackIdx].Points.size(); pointIdx++) {
+            const APointState& pointState = snapshot.Tracks[trackIdx].Points[pointIdx];
+
+            if (pointState.JunctionTrackIdx < 0 || pointState.JunctionPointIdx < 0) {
+                continue;
+            }
+
+            const size_t partnerTrackIdx = size_t(pointState.JunctionTrackIdx);
+            const size_t partnerPointIdx = size_t(pointState.JunctionPointIdx);
+
+            if (partnerTrackIdx >= mTrackPoints.size() || partnerPointIdx >= mTrackPoints[partnerTrackIdx].size()) {
+                continue;
+            }
+
+            mTrackPoints[trackIdx][pointIdx]->SetJunctionPartner(mTrackPoints[partnerTrackIdx][partnerPointIdx]);
+        }
+    }
+
+    mSelectedPickType = snapshot.PickType;
+    for (const APointSelection& sel : snapshot.Selection) {
+        if (sel.TrackIdx < mTrackPoints.size() && sel.PointIdx < mTrackPoints[sel.TrackIdx].size()) {
+            mSelectedPoints.push_back(sel);
+            mTrackPoints[sel.TrackIdx][sel.PointIdx]->SetSelected(true);
+        }
+    }
+
+    SyncPathRenderersFromTrackPoints();
+}
+
+void ATrackContext::PushUndoSnapshot() {
+    if (!IsLoaded()) {
+        return;
+    }
+
+    mUndoStack.push_back(CaptureSnapshot());
+    if (mUndoStack.size() > MAX_HISTORY_STATES) {
+        mUndoStack.erase(mUndoStack.begin());
+    }
+
+    mRedoStack.clear();
+}
+
+bool ATrackContext::Undo() {
+    if (mUndoStack.empty()) {
+        return false;
+    }
+
+    mRedoStack.push_back(CaptureSnapshot());
+    RestoreSnapshot(mUndoStack.back());
+    mUndoStack.pop_back();
+    return true;
+}
+
+bool ATrackContext::Redo() {
+    if (mRedoStack.empty()) {
+        return false;
+    }
+
+    mUndoStack.push_back(CaptureSnapshot());
+    RestoreSnapshot(mRedoStack.back());
+    mRedoStack.pop_back();
+    return true;
+}
+
+void ATrackContext::HandleUndoRedoShortcuts() {
+    const ImGuiIO& io = ImGui::GetIO();
+    if (io.WantTextInput) {
+        return;
+    }
+
+    if (io.KeyCtrl) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Z, false) && !io.KeyShift) {
+            Undo();
+        }
+        else if (ImGui::IsKeyPressed(ImGuiKey_Y, false) || (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, false))) {
+            Redo();
+        }
+    }
+
+    if (mSelectedPoints.size() != 1) {
+        return;
+    }
+
+    uint16_t trackIdx = 0;
+    uint16_t pointIdx = 0;
+    mSelectedPoints[0].Get(trackIdx, pointIdx);
+
+    if (trackIdx >= mTrackPoints.size() || pointIdx >= mTrackPoints[trackIdx].size()) {
+        return;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Insert, false)) {
+        PushUndoSnapshot();
+        InsertNodeRelative(trackIdx, pointIdx, !io.KeyShift);
+        return;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && mTrackPoints[trackIdx].size() > 1) {
+        PushUndoSnapshot();
+        DeleteSelectedNode(trackIdx, pointIdx);
+    }
 }
 
 void ATrackContext::PostprocessNodes() {
@@ -299,6 +687,16 @@ void ATrackContext::RenderTreeView() {
 }
 
 void ATrackContext::RenderDataEditor() {
+    if (ImGui::CollapsingHeader("Selection Tools", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Indent();
+        ImGui::Checkbox("Box select: fully enclosed only", &bBoxSelectionRequireFullContainment);
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SliderFloat("Box select touch radius (px)", &mBoxSelectionNodePickRadius, 2.0f, 30.0f, "%.1f");
+        ImGui::TextDisabled("Selection modifiers: Shift = add, Ctrl = toggle, no modifier = replace");
+        ImGui::Unindent();
+        ImGui::Spacing();
+    }
+
     if (!mSelectedTrack.expired()) {
         RenderTrackDataEditor(mSelectedTrack.lock());
         ImGui::Spacing();
@@ -308,7 +706,12 @@ void ATrackContext::RenderDataEditor() {
         uint16_t trackIdx, pointIdx;
         mSelectedPoints[0].Get(trackIdx, pointIdx);
 
-        RenderPointDataEditorSingle(mTrackPoints[trackIdx][pointIdx]);
+        if (trackIdx < mTrackPoints.size() && pointIdx < mTrackPoints[trackIdx].size()) {
+            RenderPointDataEditorSingle(mTrackPoints[trackIdx][pointIdx], trackIdx, pointIdx);
+        }
+        else {
+            ClearSelectedPoints();
+        }
     }
     else if (mSelectedPoints.size() > 1) {
         RenderPointDataEditorMulti();
@@ -323,6 +726,16 @@ void ATrackContext::RenderTrackDataEditor(std::shared_ptr<UTracks::UTrack> track
         UIUtil::RenderTextInput("Name", track->GetConfigNameForEditor(), 0);
 
         ImGui::Spacing();
+        UIUtil::RenderTextInput("DAT file", track->GetGameFilenameForEditor(), 0);
+        if (!track->GetGameFilenameForEditor()->empty()) {
+            std::filesystem::path datPath(*track->GetGameFilenameForEditor());
+            if (datPath.extension() != ".dat") {
+                datPath.replace_extension(".dat");
+                *track->GetGameFilenameForEditor() = datPath.generic_string();
+            }
+        }
+
+        ImGui::Spacing();
         ImGui::InputScalar("Braking Distance", ImGuiDataType_U32, track->GetBrakingDistForEditor());
 
         ImGui::Spacing();
@@ -331,13 +744,48 @@ void ATrackContext::RenderTrackDataEditor(std::shared_ptr<UTracks::UTrack> track
         ImGui::Spacing();
         ImGui::Checkbox("Stops at stations?", track->GetStopsAtStationsForEditor());
 
+        ImGui::Spacing();
+        ImGui::TextDisabled("Tip: Existing DAT bearbeiten oder neuen DAT-Namen eintragen (wird beim Speichern erzeugt).\nShortcuts: Insert=Add After, Shift+Insert=Add Before, Delete=Remove Node");
+
         ImGui::Unindent();
     }
 }
 
-void ATrackContext::RenderPointDataEditorSingle(std::shared_ptr<UTracks::UTrackPoint> point) {
+void ATrackContext::RenderPointDataEditorSingle(std::shared_ptr<UTracks::UTrackPoint> point, uint16_t trackIdx, uint16_t pointIdx) {
     if (ImGui::CollapsingHeader("Selected Node Data", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
+
+        if (trackIdx < mTracks.size()) {
+            const std::string& trackConfigName = mTracks[trackIdx]->GetConfigName();
+            const std::string& datPath = mTracks[trackIdx]->GetGameFilename();
+
+            std::string datFileName = datPath;
+            const size_t slashPos = datFileName.find_last_of("/\\");
+            if (slashPos != std::string::npos && slashPos + 1 < datFileName.size()) {
+                datFileName = datFileName.substr(slashPos + 1);
+            }
+
+            ImGui::Text("Track Config:");
+            ImGui::SameLine();
+            ImGui::TextUnformatted(trackConfigName.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Copy Config")) {
+                ImGui::SetClipboardText(trackConfigName.c_str());
+            }
+
+            ImGui::Text("Track DAT File:");
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.35f, 1.0f), "%s", datFileName.c_str());
+
+            ImGui::Text("Track DAT Path:");
+            ImGui::SameLine();
+            ImGui::TextUnformatted(datPath.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Copy DAT Path")) {
+                ImGui::SetClipboardText(datPath.c_str());
+            }
+            ImGui::Spacing();
+        }
 
         ImGui::Spacing();
         UIUtil::RenderComboEnum<UTracks::ENodeStationType>("Station Type", point->GetStationTypeForEditor());
@@ -360,7 +808,9 @@ void ATrackContext::RenderPointDataEditorSingle(std::shared_ptr<UTracks::UTrackP
                 ImGui::Text("%s", point->GetJunctionPartner().lock()->GetParentTrackName().data());
 
                 if (ImGui::Button("Clear Junction")) {
+                    PushUndoSnapshot();
                     point->SetJunctionPartner(nullptr);
+                    SyncPathRenderersFromTrackPoints();
                 }
             }
         }
@@ -372,8 +822,81 @@ void ATrackContext::RenderPointDataEditorSingle(std::shared_ptr<UTracks::UTrackP
         ImGui::Checkbox("Is in a tunnel?", point->GetIsTunnelForEditor());
 
         ImGui::Spacing();
-        if (ImGui::Checkbox("Is curve?", point->GetIsCurveForEditor())) {
+        bool isCurve = point->IsCurve();
+        if (ImGui::Checkbox("Is curve?", &isCurve)) {
+            PushUndoSnapshot();
+            SetCurveState(trackIdx, pointIdx, isCurve);
+            SyncPathRenderersFromTrackPoints();
+        }
 
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Text("History");
+
+        if (mUndoStack.empty()) {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("Undo", { 100, 0 })) {
+            Undo();
+        }
+        if (mUndoStack.empty()) {
+            ImGui::EndDisabled();
+        }
+
+        ImGui::SameLine();
+        if (mRedoStack.empty()) {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("Redo", { 100, 0 })) {
+            Redo();
+        }
+        if (mRedoStack.empty()) {
+            ImGui::EndDisabled();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Text("Node Actions");
+
+        uint16_t actionPointIdx = pointIdx;
+        bool hasSelectedPoint = false;
+        if (!mSelectedPoints.empty()) {
+            uint16_t selectedTrackIdx = 0;
+            mSelectedPoints[0].Get(selectedTrackIdx, actionPointIdx);
+            hasSelectedPoint = (selectedTrackIdx == trackIdx && actionPointIdx < mTrackPoints[trackIdx].size());
+        }
+
+        if (!hasSelectedPoint) {
+            ImGui::BeginDisabled();
+        }
+
+        if (ImGui::Button("Add Node Before", { 140, 0 }) && hasSelectedPoint) {
+            PushUndoSnapshot();
+            InsertNodeRelative(trackIdx, actionPointIdx, false);
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Add Node After", { 140, 0 }) && hasSelectedPoint) {
+            PushUndoSnapshot();
+            InsertNodeRelative(trackIdx, actionPointIdx, true);
+        }
+
+        const bool canDelete = hasSelectedPoint && mTrackPoints[trackIdx].size() > 1;
+        if (!canDelete) {
+            ImGui::BeginDisabled();
+        }
+
+        if (ImGui::Button("Delete Node", { 140, 0 }) && canDelete) {
+            PushUndoSnapshot();
+            DeleteSelectedNode(trackIdx, actionPointIdx);
+        }
+
+        if (!canDelete) {
+            ImGui::EndDisabled();
+        }
+
+        if (!hasSelectedPoint) {
+            ImGui::EndDisabled();
         }
 
         ImGui::Unindent();
@@ -384,7 +907,113 @@ void ATrackContext::RenderPointDataEditorMulti() {
     if (ImGui::CollapsingHeader("Selected Node Data", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
 
-        ImGui::Text("Editing of multiple track nodes at once\nis currently not supported.");
+        size_t validSelectionCount = 0;
+        size_t selectedCurveCount = 0;
+        bool anyTunnel = false;
+        bool allTunnel = true;
+        bool anyCurve = false;
+        bool allCurve = true;
+
+        for (const APointSelection& selection : mSelectedPoints) {
+            if (selection.TrackIdx >= mTrackPoints.size() || selection.PointIdx >= mTrackPoints[selection.TrackIdx].size()) {
+                continue;
+            }
+
+            const std::shared_ptr<UTracks::UTrackPoint>& point = mTrackPoints[selection.TrackIdx][selection.PointIdx];
+            const bool isTunnel = *point->GetIsTunnelForEditor();
+            const bool isCurve = point->IsCurve();
+
+            validSelectionCount++;
+            selectedCurveCount += isCurve ? 1 : 0;
+            anyTunnel = anyTunnel || isTunnel;
+            allTunnel = allTunnel && isTunnel;
+            anyCurve = anyCurve || isCurve;
+            allCurve = allCurve && isCurve;
+        }
+
+        if (validSelectionCount == 0) {
+            ClearSelectedPoints();
+            ImGui::Unindent();
+            return;
+        }
+
+        ImGui::Text("%zu nodes selected", validSelectionCount);
+
+        ImGui::Spacing();
+        bool tunnelValue = allTunnel;
+        if (RenderMixedCheckbox("Is in a tunnel?", &tunnelValue, anyTunnel != allTunnel)) {
+            PushUndoSnapshot();
+
+            for (const APointSelection& selection : mSelectedPoints) {
+                if (selection.TrackIdx >= mTrackPoints.size() || selection.PointIdx >= mTrackPoints[selection.TrackIdx].size()) {
+                    continue;
+                }
+
+                *mTrackPoints[selection.TrackIdx][selection.PointIdx]->GetIsTunnelForEditor() = tunnelValue;
+            }
+        }
+
+        ImGui::Spacing();
+        bool curveValue = allCurve;
+        if (RenderMixedCheckbox("Is curve?", &curveValue, anyCurve != allCurve)) {
+            PushUndoSnapshot();
+
+            for (const APointSelection& selection : mSelectedPoints) {
+                SetCurveState(selection.TrackIdx, selection.PointIdx, curveValue);
+            }
+
+            SyncPathRenderersFromTrackPoints();
+        }
+
+        ImGui::Spacing();
+        if (selectedCurveCount == 0) {
+            ImGui::BeginDisabled();
+        }
+
+        if (ImGui::Button("Recalculate Curve Handles", { 220, 0 }) && selectedCurveCount > 0) {
+            PushUndoSnapshot();
+
+            for (const APointSelection& selection : mSelectedPoints) {
+                if (selection.TrackIdx >= mTrackPoints.size() || selection.PointIdx >= mTrackPoints[selection.TrackIdx].size()) {
+                    continue;
+                }
+
+                if (mTrackPoints[selection.TrackIdx][selection.PointIdx]->IsCurve()) {
+                    RecalculateCurveHandles(selection.TrackIdx, selection.PointIdx);
+                }
+            }
+
+            SyncPathRenderersFromTrackPoints();
+        }
+
+        if (selectedCurveCount == 0) {
+            ImGui::EndDisabled();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Text("History");
+
+        if (mUndoStack.empty()) {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("Undo", { 100, 0 })) {
+            Undo();
+        }
+        if (mUndoStack.empty()) {
+            ImGui::EndDisabled();
+        }
+
+        ImGui::SameLine();
+        if (mRedoStack.empty()) {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("Redo", { 100, 0 })) {
+            Redo();
+        }
+        if (mRedoStack.empty()) {
+            ImGui::EndDisabled();
+        }
 
         ImGui::Unindent();
     }
@@ -392,7 +1021,9 @@ void ATrackContext::RenderPointDataEditorMulti() {
 
 void ATrackContext::RenderNewTrackDialog() {
     bool open = true;
-    ImGui::SetNextWindowSize({ 300, 0 });
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    const ImVec2 workSize = mainViewport != nullptr ? mainViewport->WorkSize : ImVec2(800.0f, 600.0f);
+    ImGui::SetNextWindowSize({ std::clamp(workSize.x * 0.35f, 280.0f, 420.0f), 0.0f });
     if (ImGui::BeginPopupModal(NEW_TRACK_DIALOG_LABEL, &open)) {
         ImGui::Text("New track name:");
         UIUtil::RenderTextInput("##pendingTrackName", &mPendingNewTrackName, 0);
@@ -436,12 +1067,22 @@ void ATrackContext::RenderNewTrackDialog() {
     }
 }
 
-void ATrackContext::RenderUI(ASceneCamera& camera) {
+void ATrackContext::RenderUI(ASceneCamera& camera, const glm::vec2& viewportPos, const glm::vec2& viewportSize) {
+    HandleViewportMouse(camera, viewportPos, viewportSize);
+    DrawBoxSelectionOverlay();
+
     if (mSelectedPoints.size() == 0) {
+        bWasUsingGizmo = false;
         return;
     }
 
-    if (!ImGuizmo::IsUsing()) {
+    const bool isUsingGizmo = ImGuizmo::IsUsing();
+    if (isUsingGizmo && !bWasUsingGizmo) {
+        PushUndoSnapshot();
+    }
+    bWasUsingGizmo = isUsingGizmo;
+
+    if (!isUsingGizmo) {
         bCanDuplicatePoint = true;
     }
 
@@ -451,9 +1092,15 @@ void ATrackContext::RenderUI(ASceneCamera& camera) {
     uint16_t trackIdx, pointIdx;
     mSelectedPoints[0].Get(trackIdx, pointIdx);
 
+    if (trackIdx >= mTrackPoints.size() || pointIdx >= mTrackPoints[trackIdx].size()) {
+        ClearSelectedPoints();
+        return;
+    }
+
     std::shared_ptr<UTracks::UTrackPoint> selPoint = mTrackPoints[trackIdx][pointIdx];
 
     bool bUpdated = false;
+    bool bRequireFullPathSync = false;
     switch (mSelectedPickType) {
         case ETrackNodePickType::Position:
         {
@@ -461,6 +1108,9 @@ void ATrackContext::RenderUI(ASceneCamera& camera) {
 
             if (mSelectedPoints.size() <= 100) {
                 for (const APointSelection& s : mSelectedPoints) {
+                    if (s.TrackIdx >= mTrackPoints.size() || s.PointIdx >= mTrackPoints[s.TrackIdx].size()) {
+                        continue;
+                    }
                     avgPosition += mTrackPoints[s.TrackIdx][s.PointIdx]->GetPosition();
                 }
 
@@ -496,6 +1146,10 @@ void ATrackContext::RenderUI(ASceneCamera& camera) {
 
                 glm::vec3 diff = glm::vec3(modelMtx[3]) - avgPosition;
                 for (const APointSelection& s : mSelectedPoints) {
+                    if (s.TrackIdx >= mTrackPoints.size() || s.PointIdx >= mTrackPoints[s.TrackIdx].size()) {
+                        continue;
+                    }
+
                     std::shared_ptr<UTracks::UTrackPoint> pnt = mTrackPoints[s.TrackIdx][s.PointIdx];
 
                     pnt->GetPositionForEditor() += diff;
@@ -510,6 +1164,11 @@ void ATrackContext::RenderUI(ASceneCamera& camera) {
                         partner->GetHandleAForEditor() += diff;
                         partner->GetHandleBForEditor() += diff;
                     }
+                }
+
+                if (mSelectedPoints.size() > 1) {
+                    RecalculateCurveNeighborhoodForSelection();
+                    bRequireFullPathSync = true;
                 }
 
                 bUpdated = true;
@@ -561,8 +1220,15 @@ void ATrackContext::RenderUI(ASceneCamera& camera) {
         }
     }
 
-    if (bUpdated) {
+    if (bUpdated && bRequireFullPathSync) {
+        SyncPathRenderersFromTrackPoints();
+    }
+    else if (bUpdated) {
         for (const APointSelection& s : mSelectedPoints) {
+            if (s.TrackIdx >= mTrackPoints.size() || s.TrackIdx >= mPathRenderers.size() || s.PointIdx >= mTrackPoints[s.TrackIdx].size() || s.PointIdx >= mPathRenderers[s.TrackIdx]->mPath.size()) {
+                continue;
+            }
+
             CPathPoint& p = mPathRenderers[s.TrackIdx]->mPath[s.PointIdx];
             p.Position = mTrackPoints[s.TrackIdx][s.PointIdx]->GetPosition();
             p.LeftHandle = mTrackPoints[s.TrackIdx][s.PointIdx]->GetHandleA();
@@ -573,10 +1239,225 @@ void ATrackContext::RenderUI(ASceneCamera& camera) {
     }
 }
 
+void ATrackContext::HandleViewportMouse(ASceneCamera& camera, const glm::vec2& viewportPos, const glm::vec2& viewportSize) {
+    if (mTracks.empty() || viewportSize.x <= 1.0f || viewportSize.y <= 1.0f) {
+        bBoxSelecting = false;
+        bBoxSelectionActive = false;
+        return;
+    }
+
+    const ImGuiIO& io = ImGui::GetIO();
+    const ImRect viewportRect(
+        ImVec2(viewportPos.x, viewportPos.y),
+        ImVec2(viewportPos.x + viewportSize.x, viewportPos.y + viewportSize.y)
+    );
+
+    const bool isMouseInViewport = viewportRect.Contains(io.MousePos);
+    if (!isMouseInViewport && !bBoxSelecting) {
+        return;
+    }
+
+    const auto queryBufferPos = [&]() {
+        const int32_t bufferX = int32_t(std::clamp(io.MousePos.x - viewportPos.x, 0.0f, viewportSize.x - 1.0f));
+        const int32_t bufferY = int32_t(std::clamp(viewportSize.y - (io.MousePos.y - viewportPos.y), 0.0f, viewportSize.y - 1.0f));
+        return std::pair<int32_t, int32_t>(bufferX, bufferY);
+    };
+
+    if (isMouseInViewport && !ImGuizmo::IsUsing() && !bBoxSelecting) {
+        const auto [bufferX, bufferY] = queryBufferPos();
+        OnMouseHover(camera, bufferX, bufferY);
+    }
+
+    if (isMouseInViewport && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing()) {
+        bBoxSelecting = true;
+        bBoxSelectionActive = false;
+        mBoxSelectionStartScreen = { io.MousePos.x, io.MousePos.y };
+        mBoxSelectionEndScreen = mBoxSelectionStartScreen;
+    }
+
+    if (bBoxSelecting && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        mBoxSelectionEndScreen = { io.MousePos.x, io.MousePos.y };
+        const glm::vec2 delta = mBoxSelectionEndScreen - mBoxSelectionStartScreen;
+        bBoxSelectionActive = glm::dot(delta, delta) > 16.0f;
+    }
+
+    if (bBoxSelecting && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        if (bBoxSelectionActive) {
+            ApplyBoxSelection(camera, viewportPos, viewportSize, io.KeyShift, io.KeyCtrl);
+        }
+        else if (isMouseInViewport) {
+            const auto [bufferX, bufferY] = queryBufferPos();
+            OnMouseClick(camera, bufferX, bufferY);
+        }
+
+        bBoxSelecting = false;
+        bBoxSelectionActive = false;
+    }
+}
+
+void ATrackContext::ApplyBoxSelection(ASceneCamera& camera, const glm::vec2& viewportPos, const glm::vec2& viewportSize, bool additive, bool toggle) {
+    const float minX = std::min(mBoxSelectionStartScreen.x, mBoxSelectionEndScreen.x);
+    const float maxX = std::max(mBoxSelectionStartScreen.x, mBoxSelectionEndScreen.x);
+    const float minY = std::min(mBoxSelectionStartScreen.y, mBoxSelectionEndScreen.y);
+    const float maxY = std::max(mBoxSelectionStartScreen.y, mBoxSelectionEndScreen.y);
+
+    if (!additive && !toggle) {
+        ClearSelectedPoints();
+    }
+
+    mSelectedPickType = ETrackNodePickType::Position;
+
+    for (uint16_t trackIdx = 0; trackIdx < mTrackPoints.size(); trackIdx++) {
+        if (trackIdx < mTracks.size() && mTracks[trackIdx]->IsHidden()) {
+            continue;
+        }
+
+        for (uint16_t pointIdx = 0; pointIdx < mTrackPoints[trackIdx].size(); pointIdx++) {
+            glm::vec2 screenPos = glm::zero<glm::vec2>();
+            if (!ProjectPointToViewport(camera, mTrackPoints[trackIdx][pointIdx]->GetPosition(), viewportPos, viewportSize, screenPos)) {
+                continue;
+            }
+
+            const bool fullyContained = !(screenPos.x < minX || screenPos.x > maxX || screenPos.y < minY || screenPos.y > maxY);
+            bool intersects = fullyContained;
+
+            if (!fullyContained && !bBoxSelectionRequireFullContainment) {
+                const float clampedX = std::clamp(screenPos.x, minX, maxX);
+                const float clampedY = std::clamp(screenPos.y, minY, maxY);
+                const float dx = screenPos.x - clampedX;
+                const float dy = screenPos.y - clampedY;
+                intersects = (dx * dx + dy * dy) <= (mBoxSelectionNodePickRadius * mBoxSelectionNodePickRadius);
+            }
+
+            if (!intersects) {
+                continue;
+            }
+
+            const bool wasSelected = IsPointSelected(trackIdx, pointIdx);
+
+            if (toggle) {
+                if (wasSelected) {
+                    mTrackPoints[trackIdx][pointIdx]->SetSelected(false);
+                    mSelectedPoints.erase(
+                        std::remove_if(mSelectedPoints.begin(), mSelectedPoints.end(), [trackIdx, pointIdx](const APointSelection& s) {
+                            return s.TrackIdx == trackIdx && s.PointIdx == pointIdx;
+                        }),
+                        mSelectedPoints.end()
+                    );
+                }
+                else {
+                    mSelectedPoints.push_back({ trackIdx, pointIdx });
+                    mTrackPoints[trackIdx][pointIdx]->SetSelected(true);
+                }
+                continue;
+            }
+
+            if (!wasSelected) {
+                mSelectedPoints.push_back({ trackIdx, pointIdx });
+                mTrackPoints[trackIdx][pointIdx]->SetSelected(true);
+            }
+        }
+    }
+}
+
+void ATrackContext::DrawBoxSelectionOverlay() const {
+    if (!bBoxSelecting) {
+        return;
+    }
+
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    const ImVec2 minCorner(
+        std::min(mBoxSelectionStartScreen.x, mBoxSelectionEndScreen.x),
+        std::min(mBoxSelectionStartScreen.y, mBoxSelectionEndScreen.y)
+    );
+    const ImVec2 maxCorner(
+        std::max(mBoxSelectionStartScreen.x, mBoxSelectionEndScreen.x),
+        std::max(mBoxSelectionStartScreen.y, mBoxSelectionEndScreen.y)
+    );
+
+    drawList->AddRectFilled(minCorner, maxCorner, IM_COL32(255, 120, 40, 45));
+    drawList->AddRect(minCorner, maxCorner, IM_COL32(255, 120, 40, 220), 0.0f, 0, 1.5f);
+}
+
+bool ATrackContext::ProjectPointToViewport(ASceneCamera& camera, const glm::vec3& position, const glm::vec2& viewportPos, const glm::vec2& viewportSize, glm::vec2& outScreenPos) const {
+    const glm::vec4 clipPos = camera.GetProjectionMatrix() * camera.GetViewMatrix() * glm::vec4(position, 1.0f);
+    if (std::abs(clipPos.w) < 0.0001f) {
+        return false;
+    }
+
+    const glm::vec3 ndc = glm::vec3(clipPos) / clipPos.w;
+    if (ndc.z < -1.0f || ndc.z > 1.0f) {
+        return false;
+    }
+
+    outScreenPos.x = viewportPos.x + ((ndc.x * 0.5f) + 0.5f) * viewportSize.x;
+    outScreenPos.y = viewportPos.y + (1.0f - ((ndc.y * 0.5f) + 0.5f)) * viewportSize.y;
+    return true;
+}
+
+bool ATrackContext::IsPointSelected(uint16_t trackIdx, uint16_t pointIdx) const {
+    for (const APointSelection& selection : mSelectedPoints) {
+        if (selection.TrackIdx == trackIdx && selection.PointIdx == pointIdx) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void ATrackContext::RecalculateCurveNeighborhoodForSelection() {
+    std::unordered_set<uint32_t> recalculationSet;
+
+    for (const APointSelection& selection : mSelectedPoints) {
+        if (selection.TrackIdx >= mTrackPoints.size() || selection.PointIdx >= mTrackPoints[selection.TrackIdx].size()) {
+            continue;
+        }
+
+        const uint16_t trackIdx = selection.TrackIdx;
+        const uint16_t pointIdx = selection.PointIdx;
+        const size_t pointCount = mTrackPoints[trackIdx].size();
+        const bool loops = trackIdx < mTracks.size() && *mTracks[trackIdx]->GetLoopsForEditor();
+
+        auto encode = [](uint16_t t, uint16_t p) {
+            return (uint32_t(t) << 16) | uint32_t(p);
+        };
+
+        recalculationSet.insert(encode(trackIdx, pointIdx));
+
+        if (pointCount < 2) {
+            continue;
+        }
+
+        if (loops || pointIdx > 0) {
+            const uint16_t prevIdx = loops ? uint16_t((pointIdx + pointCount - 1) % pointCount) : uint16_t(pointIdx - 1);
+            recalculationSet.insert(encode(trackIdx, prevIdx));
+        }
+
+        if (loops || pointIdx + 1 < pointCount) {
+            const uint16_t nextIdx = loops ? uint16_t((pointIdx + 1) % pointCount) : uint16_t(pointIdx + 1);
+            recalculationSet.insert(encode(trackIdx, nextIdx));
+        }
+    }
+
+    for (uint32_t encoded : recalculationSet) {
+        const uint16_t trackIdx = uint16_t((encoded >> 16) & 0xFFFF);
+        const uint16_t pointIdx = uint16_t(encoded & 0xFFFF);
+        if (trackIdx >= mTrackPoints.size() || pointIdx >= mTrackPoints[trackIdx].size()) {
+            continue;
+        }
+
+        if (mTrackPoints[trackIdx][pointIdx]->IsCurve()) {
+            RecalculateCurveHandles(trackIdx, pointIdx);
+        }
+    }
+}
+
 void ATrackContext::Render(ASceneCamera& camera) {
     if (mTracks.size() == 0) {
         return;
     }
+
+    HandleUndoRedoShortcuts();
 
     UCommonUniformBuffer::SetProjAndViewMatrices(camera.GetProjectionMatrix(), camera.GetViewMatrix());
     glBindVertexArray(mPntVAO);
@@ -604,6 +1485,12 @@ void ATrackContext::Render(ASceneCamera& camera) {
             }
             else if (pnt->IsHighlighted()) {
                 glUniform4fv(mBaseColorUniform, 1, &HIGHLIGHT_COLOR.x);
+            }
+            else if (pnt->GetStationType() != UTracks::ENodeStationType::None) {
+                glUniform4fv(mBaseColorUniform, 1, &STATION_COLOR.x);
+            }
+            else if (pnt->IsJunction()) {
+                glUniform4fv(mBaseColorUniform, 1, &JUNCTION_COLOR.x);
             }
             else {
                 glUniform4fv(mBaseColorUniform, 1, &NORMAL_COLOR.x);
@@ -710,6 +1597,10 @@ void ATrackContext::OnMouseHover(ASceneCamera& camera, int32_t pX, int32_t pY) {
     uint16_t trackIdx = ((result & 0x3FFF0000) >> 16) - 1;
     uint16_t pointIdx = (result & 0xFFFF) - 1;
 
+    if (trackIdx >= mTrackPoints.size() || pointIdx >= mTrackPoints[trackIdx].size()) {
+        return;
+    }
+
     mTrackPoints[trackIdx][pointIdx]->SetHighlighted(true);
 }
 
@@ -725,11 +1616,15 @@ void ATrackContext::OnMouseClick(ASceneCamera& camera, int32_t pX, int32_t pY) {
     uint16_t trackIdx = ((result & 0x3FFF0000) >> 16) - 1;
     uint16_t pointIdx = (result & 0xFFFF) - 1;
 
+    const bool pickInRange = (trackIdx < mTrackPoints.size() && pointIdx < mTrackPoints[trackIdx].size());
+
     if (bSelectingJunctionPartner) {
-        if (pickType != ETrackNodePickType::Position || trackIdx == UINT16_MAX) {
+        if (pickType != ETrackNodePickType::Position || trackIdx == UINT16_MAX || !pickInRange) {
             bSelectingJunctionPartner = false;
             return;
         }
+
+        PushUndoSnapshot();
 
         std::shared_ptr<UTracks::UTrackPoint> junctionPartner = mTrackPoints[trackIdx][pointIdx];
         if (junctionPartner->HasJunctionPartner()) {
@@ -738,6 +1633,12 @@ void ATrackContext::OnMouseClick(ASceneCamera& camera, int32_t pX, int32_t pY) {
 
         uint16_t trackIdx, pointIdx;
         mSelectedPoints[0].Get(trackIdx, pointIdx);
+
+        if (trackIdx >= mTrackPoints.size() || pointIdx >= mTrackPoints[trackIdx].size()) {
+            bSelectingJunctionPartner = false;
+            ClearSelectedPoints();
+            return;
+        }
 
         std::shared_ptr<UTracks::UTrackPoint> selPoint = mTrackPoints[trackIdx][pointIdx];
         selPoint->SetJunctionPartner(junctionPartner);
@@ -756,27 +1657,49 @@ void ATrackContext::OnMouseClick(ASceneCamera& camera, int32_t pX, int32_t pY) {
         junctionPartner->GetHandleBForEditor() = middleHandleB;
 
         bSelectingJunctionPartner = false;
+        SyncPathRenderersFromTrackPoints();
     }
     else {
-        if (result == 0 || !ImGui::GetIO().KeyCtrl) {
+        const ImGuiIO& io = ImGui::GetIO();
+        const bool additive = io.KeyShift;
+        const bool toggle = io.KeyCtrl;
+
+        if ((result == 0 || !pickInRange) && !additive && !toggle) {
             ClearSelectedPoints();
         }
 
-        if (result == 0) {
+        if (result == 0 || !pickInRange) {
             mSelectedPickType = ETrackNodePickType::Position;
             return;
         }
 
-        for (const APointSelection s : mSelectedPoints) {
-            if (s.TrackIdx == trackIdx && s.PointIdx == pointIdx) {
+        if (!additive && !toggle) {
+            ClearSelectedPoints();
+        }
+
+        if (toggle) {
+            if (IsPointSelected(trackIdx, pointIdx)) {
+                mTrackPoints[trackIdx][pointIdx]->SetSelected(false);
+                mSelectedPoints.erase(
+                    std::remove_if(mSelectedPoints.begin(), mSelectedPoints.end(), [trackIdx, pointIdx](const APointSelection& s) {
+                        return s.TrackIdx == trackIdx && s.PointIdx == pointIdx;
+                    }),
+                    mSelectedPoints.end()
+                );
+
+                if (mSelectedPoints.empty()) {
+                    mSelectedPickType = ETrackNodePickType::Position;
+                }
                 return;
             }
         }
 
         mSelectedPickType = pickType;
 
-        mSelectedPoints.push_back({ trackIdx, pointIdx });
-        mTrackPoints[trackIdx][pointIdx]->SetSelected(true);
+        if (!IsPointSelected(trackIdx, pointIdx)) {
+            mSelectedPoints.push_back({ trackIdx, pointIdx });
+            mTrackPoints[trackIdx][pointIdx]->SetSelected(true);
+        }
     }
 }
 
@@ -785,7 +1708,9 @@ void ATrackContext::ClearSelectedPoints() {
         uint16_t trackIdx, pointIdx;
         pnt.Get(trackIdx, pointIdx);
 
-        mTrackPoints[trackIdx][pointIdx]->SetSelected(false);
+        if (trackIdx < mTrackPoints.size() && pointIdx < mTrackPoints[trackIdx].size()) {
+            mTrackPoints[trackIdx][pointIdx]->SetSelected(false);
+        }
     }
 
     mSelectedPoints.clear();

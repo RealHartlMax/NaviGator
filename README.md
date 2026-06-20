@@ -1,145 +1,119 @@
 # NaviGator
 
-> This project is no longer under active development. Feel free to fork and continue it.
+NaviGator is a C++17 desktop OpenGL editor/viewer for Rockstar-style railroad and navmesh assets.
 
----
+The current codebase supports:
+- Loading and rendering `.ynv` navmeshes
+- Loading, editing, and saving railroad tracks (`traintracks.xml` + `.dat`)
+- Node picking, multi-selection, box selection, and gizmo-based transforms
+- Curve node editing with automatic bezier handle recalculation
 
-## English
+## Project Status
 
-### What this project is
-NaviGator is a C++17 desktop OpenGL tool for inspecting and editing railway/nav-related game data.  
-It focuses on:
+This project is feature-usable but still work-in-progress. There is no automated CI/test suite yet.
 
-- loading and rendering `.ynv` navmesh files,
-- loading/editing/saving railway tracks from `traintracks.xml` + `.dat` files,
-- simple 3D viewport interaction, picking, and gizmo-based node editing,
-- optional conversion support for `swrailroad.wsi` (RDR1 utility flow).
+## Features
 
-### Core architecture
+### Track editing
+- Single-node and multi-node selection
+- Box selection by drag in viewport
+- Selection modifiers:
+  - No modifier: replace selection
+  - Shift: additive selection
+  - Ctrl: toggle selection
+- Node actions: add before/after, delete
+- Junction assignment/clear
+- Curve mode toggle and handle recalculation
+- Multi-node curve/tunnel batch edit
+- Undo/redo for editor operations
 
-- **Application layer** (`include/application`, `src/application`)
-  - app lifecycle (`AApplication`, `AGatorApplication`)
-  - central orchestration (`AGatorContext`)
-  - camera/input/options management
-- **Track domain layer** (`include/tracks`, `src/tracks`)
-  - track config serialization (XML)
-  - node point parsing/saving (`.dat`)
-  - junction/station/tunnel metadata
-- **UI + rendering layer** (`include/ui`, `src/ui`, `asset/shader`)
-  - main viewport framebuffer
-  - object ID picking buffer
-  - path rendering + shader programs
-- **Utilities** (`include/util`, `src/util`)
-  - shader loading
-  - helper UI elements
-  - RDR1 railroad extraction helper
+### Navmesh support (`.ynv`)
+- `.ynv` files can be opened via file dialog or drag-and-drop
+- Imported navmesh geometry is converted to GL buffers and rendered with simple lighting
+- Loaded navmeshes are listed in Properties and can be removed individually or cleared all-at-once
+- Editable flags in Properties:
+  - Navmesh flags (`ENavMeshFlags`)
+  - Per-polygon flags (`EPolygonFlags`), including bulk apply-to-all
 
-### Tech stack
+## Controls
 
-- C++17, CMake (>= 3.12)
-- OpenGL (GLAD), GLFW3
-- ImGui + ImGuizmo + ImGuiFileDialog
-- GLM
-- pugixml
-- Recast
-- librdr3
-- Tracy (profiling hooks in code)
+### Camera (viewport focused)
+- RMB drag: look around
+- MMB drag: pan
+- Mouse wheel: movement speed / zoom behavior (camera mode dependent)
+- W/A/S/D/Q/E: free-move in perspective mode
 
-### Build
+### Track selection/editing
+- LMB click: select node/handle
+- LMB drag: box selection
+- Shift + selection: add
+- Ctrl + selection: toggle
+- Insert: add node after selected node
+- Shift + Insert: add node before selected node
+- Delete: remove selected node
+- Gizmo translate while one/multiple nodes selected
 
-1. Clone with submodules:
-   ```bash
-   git submodule update --init --recursive
-   ```
-2. Configure:
-   ```bash
-   cmake -S . -B build
-   ```
-3. Build:
-   ```bash
-   cmake --build build
-   ```
+## Build
 
-> Note: `GLFW3` must be discoverable by CMake (`find_package(GLFW3 REQUIRED)`).
+### Prerequisites
+- CMake >= 3.12
+- C++17 compiler (MSVC, clang, or GCC)
+- Git submodules initialized
 
-### Runtime files
+### 1) Clone and fetch submodules
 
-- Shaders: `asset/shader/*`
-- Font: `asset/font/MaterialSymbolsRounded.ttf`
-- Options file (generated): `navigator.xml`
+```bash
+git submodule update --init --recursive
+```
 
-### Current status
+### 2) Configure
 
-- No automated test suite is configured in this repository.
-- Build in this environment currently fails at configure time if GLFW3 is not installed/discoverable.
+Recommended out-of-source build:
 
----
+```bash
+cmake -S . -B build-local
+```
 
-## Deutsch
+### 3) Build
 
-### Worum es in diesem Projekt geht
-NaviGator ist ein C++17-Desktoptool auf OpenGL-Basis zum Anzeigen und Bearbeiten von eisenbahn-/navigationsbezogenen Spieldaten.  
-Hauptfunktionen:
+```bash
+cmake --build build-local --config Debug
+```
 
-- Laden und Rendern von `.ynv`-Navmesh-Dateien,
-- Laden/Bearbeiten/Speichern von Gleisdaten aus `traintracks.xml` + `.dat`,
-- 3D-Viewport-Interaktion mit Picking und Gizmo-Manipulation,
-- optionale Konvertierung für `swrailroad.wsi` (RDR1-Helferfunktion).
+Notes:
+- If `VCPKG_ROOT` is set, the root `CMakeLists.txt` prefers the vcpkg toolchain.
+- GLFW is resolved via `find_package(...)` and can fall back to CMake `FetchContent`.
 
-### Kernarchitektur
+## Runtime Files
 
-- **Application-Schicht** (`include/application`, `src/application`)
-  - App-Lebenszyklus (`AApplication`, `AGatorApplication`)
-  - zentrale Steuerung (`AGatorContext`)
-  - Kamera/Input/Optionen
-- **Track-Domain** (`include/tracks`, `src/tracks`)
-  - XML-Serialisierung der Track-Konfiguration
-  - Parsen/Speichern der Node-Daten (`.dat`)
-  - Junction-/Stations-/Tunnel-Metadaten
-- **UI + Rendering** (`include/ui`, `src/ui`, `asset/shader`)
-  - Viewport-Framebuffer
-  - ID-Picking-Buffer
-  - Pfad-Rendering + Shader
-- **Utilities** (`include/util`, `src/util`)
-  - Shader-Loading
-  - UI-Helfer
-  - RDR1-Railroad-Extraktion
+Required assets:
+- `asset/shader/*`
+- `asset/font/MaterialSymbolsRounded.ttf`
 
-### Technologie-Stack
+Generated files:
+- `navigator.xml` (options)
+- `imgui.ini` (layout)
 
-- C++17, CMake (>= 3.12)
-- OpenGL (GLAD), GLFW3
-- ImGui + ImGuizmo + ImGuiFileDialog
-- GLM
-- pugixml
-- Recast
-- librdr3
-- Tracy (Profiling-Hooks)
+## Known Limitations
 
-### Build
+### Navmesh (`.ynv`) limitations
+- `.ynv` import now has defensive validation (null/empty checks) and reports last load status/error in the Properties panel.
+- Navmesh flag editing is in-memory only right now (no export/save workflow in UI yet).
+- No deep navmesh inspection tools yet (for example adjacency/link graph editors).
+- Diagnostics are basic (last load info/error text only), without a detailed import log view.
 
-1. Submodule initialisieren:
-   ```bash
-   git submodule update --init --recursive
-   ```
-2. Konfigurieren:
-   ```bash
-   cmake -S . -B build
-   ```
-3. Bauen:
-   ```bash
-   cmake --build build
-   ```
+### General
+- No unsaved-changes prompt for modified track data.
+- No automated tests for parser/serializer or editor workflows.
+- `.ydr` loading path exists but visible viewport integration is incomplete.
 
-> Hinweis: `GLFW3` muss für CMake auffindbar sein (`find_package(GLFW3 REQUIRED)`).
+## Suggested Next Steps
 
-### Laufzeitdateien
+1. Add navmesh save/export workflow from edited in-memory data.
+2. Add error/toast reporting for failed `.ynv`/track file loads.
+3. Add smoke tests for `.dat` and `.ynv` loading.
+4. Add deeper navmesh inspection (links, adjacency, polygon metadata browser).
 
-- Shader: `asset/shader/*`
-- Font: `asset/font/MaterialSymbolsRounded.ttf`
-- Optionen-Datei (wird erzeugt): `navigator.xml`
+## License
 
-### Aktueller Zustand
-
-- Es gibt derzeit keine automatisierten Tests in diesem Repository.
-- In dieser Umgebung schlägt die Konfiguration fehl, wenn GLFW3 nicht installiert/auffindbar ist.
+See `LICENSE`.

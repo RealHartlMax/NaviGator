@@ -37,11 +37,13 @@ namespace UTracks {
         shared_vector<UTracks::UTrackPoint> LoadNodePoints(std::filesystem::path dirName);
         void SaveNodePoints(std::filesystem::path dirName, shared_vector<UTrackPoint>& points);
 
+        const std::string& GetGameFilename() const { return mGameFilename; }
         const std::string GetConfigName() const { return mConfigName; }
         bool IsHidden() const { return bIsHidden; }
         void SetHidden(bool hidden) { bIsHidden = hidden; }
 
         std::string* GetConfigNameForEditor() { return &mConfigName; }
+        std::string* GetGameFilenameForEditor() { return &mGameFilename; }
         bool* GetStopsAtStationsForEditor() { return &bStopsAtStations; }
         bool* GetLoopsForEditor() { return &bLoops; }
         uint32_t* GetBrakingDistForEditor() { return &mBrakingDist; }

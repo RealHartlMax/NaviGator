@@ -3,7 +3,8 @@
 
 
 void AApplication::Run() {
-	Clock::time_point lastFrameTime, thisFrameTime;
+	Clock::time_point thisFrameTime = AUtil::GetTime();
+	Clock::time_point lastFrameTime = thisFrameTime;
 
 	while (true) {
 		lastFrameTime = thisFrameTime;

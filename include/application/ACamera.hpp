@@ -42,18 +42,20 @@ class ASceneCamera {
 	float mZoomLevel;
 
 	ImVec2 mLastMouseDelta;
+	bool mAcceptKeyboardInput;
+	bool mAcceptMouseInput;
 
 	uint8_t mViewMode = CAM_VIEW_PROJ;
 
 	void ProcessInputProjection(float deltaTime);
 	void ProcessInputOrthographic(float deltaTime);
-	void Rotate(float deltaTime, float sensitivity, ImVec2 mouseDelta);
+	void Rotate(float sensitivity, ImVec2 mouseDelta);
 
 public:
 	ASceneCamera();
 	~ASceneCamera() {}
 
-	void Update(float deltaTime, float screenWidth, float screenHeight);
+	void Update(float deltaTime, float screenWidth, float screenHeight, bool acceptKeyboardInput, bool acceptMouseInput);
 
 	const glm::vec3& GetForwardVector() const { return mForward; }
 

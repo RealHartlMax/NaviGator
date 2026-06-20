@@ -53,6 +53,10 @@ nunit-*.xml
 [Dd]ebugPS/
 [Rr]eleasePS/
 dlldata.c
+build-local/
+dist-debug/
+imgui.ini
+dist-debug.zip
 
 # Benchmark Results
 BenchmarkDotNet.Artifacts/

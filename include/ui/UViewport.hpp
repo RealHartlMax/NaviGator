@@ -14,6 +14,10 @@ class UViewport {
     glm::vec2 mViewportSize;
 
     bool bIsOpen;
+    bool bShowGroundGrid = true;
+    bool bShowNodeLegend = true;
+    bool bShowEditorHints = true;
+    float mGroundGridSize = 250.0f;
 
     void CreateFramebuffer();
     void ResizeViewport();

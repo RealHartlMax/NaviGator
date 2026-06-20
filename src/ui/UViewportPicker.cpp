@@ -3,6 +3,7 @@
 #include "util/fileutil.hpp"
 
 #include <glad/glad.h>
+#include <iostream>
 
 namespace {
     constexpr uint32_t DATA_RESET = 0;
@@ -21,36 +22,52 @@ namespace {
     uint32_t mObjectIdUniform = 0;
 
     void CreateShader() {
-        // Compile vertex shader
-        std::string vertTxt = UFileUtil::LoadShaderText("picker.vert");
-        const char* vertTxtChars = vertTxt.data();
+        try {
+            // Compile vertex shader
+            std::cout << "Loading picker.vert..." << std::endl;
+            std::string vertTxt = UFileUtil::LoadShaderText("picker.vert");
+            if (vertTxt.empty()) {
+                throw std::runtime_error("Failed to load picker.vert");
+            }
+            const char* vertTxtChars = vertTxt.data();
 
-        uint32_t vertHandle = glCreateShader(GL_VERTEX_SHADER);
-        glShaderSource(vertHandle, 1, &vertTxtChars, NULL);
-        glCompileShader(vertHandle);
+            uint32_t vertHandle = glCreateShader(GL_VERTEX_SHADER);
+            glShaderSource(vertHandle, 1, &vertTxtChars, NULL);
+            glCompileShader(vertHandle);
 
-        // Compile fragment shader
-        std::string fragTxt = UFileUtil::LoadShaderText("picker.frag");
-        const char* fragTxtChars = fragTxt.data();
+            // Compile fragment shader
+            std::cout << "Loading picker.frag..." << std::endl;
+            std::string fragTxt = UFileUtil::LoadShaderText("picker.frag");
+            if (fragTxt.empty()) {
+                throw std::runtime_error("Failed to load picker.frag");
+            }
+            const char* fragTxtChars = fragTxt.data();
 
-        uint32_t fragHandle = glCreateShader(GL_FRAGMENT_SHADER);
-        glShaderSource(fragHandle, 1, &fragTxtChars, NULL);
-        glCompileShader(fragHandle);
+            uint32_t fragHandle = glCreateShader(GL_FRAGMENT_SHADER);
+            glShaderSource(fragHandle, 1, &fragTxtChars, NULL);
+            glCompileShader(fragHandle);
 
-        // Generate shader program
-        mProgram = glCreateProgram();
-        glAttachShader(mProgram, vertHandle);
-        glAttachShader(mProgram, fragHandle);
-        glLinkProgram(mProgram);
+            // Generate shader program
+            mProgram = glCreateProgram();
+            glAttachShader(mProgram, vertHandle);
+            glAttachShader(mProgram, fragHandle);
+            glLinkProgram(mProgram);
 
-        // Clean up
-        glDetachShader(mProgram, vertHandle);
-        glDetachShader(mProgram, fragHandle);
-        glDeleteShader(vertHandle);
-        glDeleteShader(fragHandle);
+            // Clean up
+            glDetachShader(mProgram, vertHandle);
+            glDetachShader(mProgram, fragHandle);
+            glDeleteShader(vertHandle);
+            glDeleteShader(fragHandle);
 
-        UCommonUniformBuffer::LinkShaderToUBO(mProgram);
-        mObjectIdUniform = glGetUniformLocation(mProgram, "uObjectId");
+            UCommonUniformBuffer::LinkShaderToUBO(mProgram);
+            mObjectIdUniform = glGetUniformLocation(mProgram, "uObjectId");
+            
+            std::cout << "Picker shader created successfully" << std::endl;
+        }
+        catch (const std::exception& ex) {
+            std::cerr << "Exception in CreateShader: " << ex.what() << std::endl;
+            throw;
+        }
     }
 
     void CreateFramebuffer(uint32_t width, uint32_t height) {
@@ -86,6 +103,21 @@ void UViewportPicker::CreatePicker(uint32_t width, uint32_t height) {
 }
 
 void UViewportPicker::ResizePicker(uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) {
+        return;
+    }
+
+    // Lazy initialization - create picker on first resize with valid size
+    if (mProgram == 0) {
+        std::cout << "Lazy initializing viewport picker with size: " << width << " x " << height << std::endl;
+        CreatePicker(width, height);
+        return;
+    }
+
+    if (width == mWidth && height == mHeight) {
+        return;
+    }
+
     DeleteFramebuffer();
     CreateFramebuffer(width, height);
 }

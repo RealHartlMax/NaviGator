@@ -2,6 +2,7 @@
 
 in vec3 aFragPos;
 in vec3 aNormal;
+in vec3 aColor;
 
 out vec4 oPixelColor;
 
@@ -45,6 +46,6 @@ void main() {
   float spec = pow(max(dot(viewDir, reflectDir), 0.0), 8);
   vec3 specColor = mLight.mColor.xyz * specular * spec;
   
-  vec3 result = ambColor + diffColor + specColor;
+  vec3 result = (ambColor + diffColor + specColor) * aColor;
   oPixelColor = vec4(result.xyz, 1.0);
 }

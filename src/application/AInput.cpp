@@ -33,7 +33,7 @@ namespace AInput {
 			mMousePosition = glm::vec2(x, y);
 		}
 
-		void SetMouseScrollDelta(uint32_t delta) {
+		void SetMouseScrollDelta(int32_t delta) {
 			mMouseScrollDelta = delta;
 		}
 	}
@@ -111,5 +111,5 @@ void AInput::GLFWMouseButtonCallback(GLFWwindow* window, int button, int action,
 }
 
 void AInput::GLFWMouseScrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
-	SetMouseScrollDelta(uint32_t(yoffset));
+	SetMouseScrollDelta(int32_t(yoffset));
 }

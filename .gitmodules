@@ -1,15 +1,15 @@
 [submodule "lib/imgui"]
 	path = lib/imgui
-	url = git@github.com:ocornut/imgui.git
+	url = https://github.com/ocornut/imgui.git
 [submodule "lib/librdr3"]
 	path = lib/librdr3
-	url = git@github.com:Sage-of-Mirrors/librdr3.git
+	url = https://github.com/Sage-of-Mirrors/librdr3.git
 [submodule "lib/pugixml"]
 	path = lib/pugixml
-	url = git@github.com:zeux/pugixml.git
+	url = https://github.com/zeux/pugixml.git
 [submodule "lib/imguizmo"]
 	path = lib/imguizmo
-	url = git@github.com:CedricGuillemet/ImGuizmo.git
+	url = https://github.com/CedricGuillemet/ImGuizmo.git
 [submodule "lib/tracy"]
 	path = lib/tracy
-	url = git@github.com:wolfpld/tracy.git
+	url = https://github.com/wolfpld/tracy.git

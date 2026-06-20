@@ -26,10 +26,15 @@ class AGatorContext {
     std::shared_ptr<ATrackContext> mTrackContext;
     std::shared_ptr< ADrawableContext> mDrawableContext;
 
+    int mSelectedNavmeshIndex = -1;
+    int mSelectedPolygonIndex = 0;
+    bool mEnableNavmeshFacePick = true;
+
     void RenderPropertiesPanel();
 
     void LoadFileCB();
 
+    void SaveTracksCB();
     void SaveTracksAsCB();
 
     void OpenFile(std::filesystem::path filePath);

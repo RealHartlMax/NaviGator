@@ -15,7 +15,7 @@ int TextInputCallback(ImGuiInputTextCallbackData* data)
 
 bool UIUtil::RenderTextInput(std::string name, std::string* value, const int width)
 {
-	ImGui::PushItemWidth(width);
+	ImGui::PushItemWidth(static_cast<float>(width));
 
 	bool result = ImGui::InputText(name.c_str(), value->data(), value->size() + 1, ImGuiInputTextFlags_CallbackResize, TextInputCallback, value);
 
