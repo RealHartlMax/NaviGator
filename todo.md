@@ -1,23 +1,22 @@
 # TODO
 
-## High priority
+## Verbesserungen
 
-- [ ] Fix first-frame delta time initialization in `AApplication::Run` (`src/application/AApplication.cpp`).
-- [ ] Make dependency setup reproducible (document/package GLFW3 + other required system libs for Linux/Windows).
-- [ ] Add robust file validation/error feedback for XML/DAT/navmesh loading flows.
-- [ ] Add bounds checks for user input paths and parsing errors to prevent crashes on malformed files.
+- [ ] Delta-Time im ersten Frame korrekt initialisieren (`src/application/AApplication.cpp`).
+- [ ] File-Loading robuster machen (validierte XML/DAT/YNV-Fehlerausgaben statt stiller Abbrüche).
+- [ ] UX für Track-Bearbeitung verbessern (klarere Zustände, besseres Edit-Feedback, Undo/Redo-Konzept).
+- [ ] Unsaved-Changes-Tracking ergänzen und vor Datenverlust beim Beenden warnen.
 
-## Medium priority
+## Updates
 
-- [ ] Optimize viewport/picking buffer resize logic to avoid recreating framebuffers every frame.
-- [ ] Add an explicit “Close/Quit” action in UI (`File -> Close` currently has no shutdown handling).
-- [ ] Implement drawable rendering flow after `.ydr` import (currently data loads but is not displayed).
-- [ ] Improve UX for track editing (batch edit, clearer junction editing state, undo/redo support).
-- [ ] Add save-state dirtiness tracking and prompt before losing unsaved changes.
+- [ ] Build-/Dependency-Setup reproduzierbar dokumentieren (insb. GLFW3 für Linux/Windows).
+- [ ] CI für CMake Configure/Build auf Linux einführen.
+- [ ] Smoke-/Parser-Tests für Track-Formate ergänzen.
+- [ ] Entwicklerdokumentation erweitern (Setup, Beitrag, typische Fehlerquellen).
 
-## Low priority
+## Stabilität
 
-- [ ] Add CI workflow for CMake configure/build on at least one Linux toolchain.
-- [ ] Add smoke tests / parser tests for track data formats.
-- [ ] Split rendering, data, and UI responsibilities further for easier maintenance.
-- [ ] Add contribution guide and development setup docs.
+- [ ] Bounds-Checks und Fehlerbehandlung für Nutzerpfade/Parser-Eingaben ergänzen.
+- [ ] Framebuffer nur bei tatsächlicher Größenänderung neu erstellen (Viewport + Picker).
+- [ ] `File -> Close` korrekt mit App-Shutdown verknüpfen.
+- [ ] `.ydr`-Import vollständig in den Renderpfad integrieren (sichtbares Ergebnis).
