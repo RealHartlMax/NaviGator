@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeFiles\c1232bc80d7d7468798fdaf45991c4b8\magic_enum-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeFiles\c1232bc80d7d7468798fdaf45991c4b8\magic_enum-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeFiles\c1232bc80d7d7468798fdaf45991c4b8\magic_enum-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeFiles\c1232bc80d7d7468798fdaf45991c4b8\magic_enum-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeFiles\c1232bc80d7d7468798fdaf45991c4b8\magic_enum-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeFiles\c1232bc80d7d7468798fdaf45991c4b8\magic_enum-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeFiles\c1232bc80d7d7468798fdaf45991c4b8\magic_enum-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeFiles\c1232bc80d7d7468798fdaf45991c4b8\magic_enum-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeFiles\44dd1d7ee8608d9d362a110c75daee0a\magic_enum-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeFiles\2b2b1dd73816eccbdf76a377374570d2\magic_enum-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\GitHub\NaviGator\build\_deps\magic_enum-subbuild\CMakeFiles\magic_enum-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{C66C547C-529D-3284-96B2-7E97DD2A4C96}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -141,4 +141,12 @@ public:
     void SaveTracks(std::filesystem::path dirPath);
 
     bool IsLoaded() const { return mTracks.size() != 0; }
+    
+    // Get all track points from the first track (for UI panels)
+    shared_vector<UTracks::UTrackPoint> GetAllTrackPoints() const {
+        if (mTrackPoints.empty() || mTrackPoints[0].empty()) {
+            return shared_vector<UTracks::UTrackPoint>();
+        }
+        return mTrackPoints[0];
+    }
 };

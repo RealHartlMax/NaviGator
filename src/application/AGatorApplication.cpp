@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <string>
+#include <filesystem>
+#include <iostream>
 #include <iostream>
 #include <vector>
 
@@ -124,8 +126,34 @@ bool AGatorApplication::Setup() {
 	config.MergeMode = true;
 	config.GlyphMinAdvanceX = 13.0f * uiScale;
 
+	// Try to load font from multiple possible locations
 	static const ImWchar icon_ranges[] = { 0xE000, 0xF8FF, 0 };
-	io.Fonts->AddFontFromFileTTF("asset/font/MaterialSymbolsRounded.ttf", 13.0f * uiScale, &config, icon_ranges);
+	ImFont* iconFont = nullptr;
+	
+	std::vector<std::filesystem::path> fontSearchPaths = {
+		"asset/font/MaterialSymbolsRounded.ttf",  // From project root
+		"../../asset/font/MaterialSymbolsRounded.ttf",  // From build/Debug
+		std::filesystem::current_path() / "asset/font/MaterialSymbolsRounded.ttf",  // From cwd
+	};
+	
+	for (const auto& fontPath : fontSearchPaths) {
+		if (std::filesystem::exists(fontPath)) {
+			iconFont = io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), 13.0f * uiScale, &config, icon_ranges);
+			if (iconFont) {
+				std::cout << "Loaded font from: " << fontPath << std::endl;
+				break;
+			}
+		}
+	}
+	
+	// If still not found, just skip icon font
+	if (!iconFont) {
+		std::string searchPaths;
+		for (const auto& p : fontSearchPaths) {
+			searchPaths += p.string() + "\n  ";
+		}
+		std::cerr << "Warning: Could not load font. Searched:\n  " << searchPaths << std::endl;
+	}
 
 	ImGui_ImplGlfw_InitForOpenGL(mWindow, true);
 	ImGui_ImplOpenGL3_Init("#version 150");
@@ -137,6 +165,14 @@ bool AGatorApplication::Setup() {
 		
 		mContext->OnGLInitialized();
 		std::cout << "AGatorContext OnGLInitialized() completed successfully" << std::endl;
+		
+		// Auto-load test drawable directory if it exists (for development testing)
+		std::filesystem::path testDrawableDir = "G:\\dist-debug\\ydr";
+		if (std::filesystem::exists(testDrawableDir) && std::filesystem::is_directory(testDrawableDir)) {
+			std::cout << "\n=== AUTO-LOADING TEST DRAWABLE DIRECTORY ===" << std::endl;
+			mContext->LoadWorldDir(testDrawableDir);
+			std::cout << "=== TEST DRAWABLE LOADING COMPLETE ===" << std::endl;
+		}
 	}
 	catch (const std::exception& ex) {
 		std::cerr << "Exception during context initialization: " << ex.what() << std::endl;

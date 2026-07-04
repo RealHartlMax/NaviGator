@@ -6,6 +6,7 @@ class UViewport;
 class ANavContext;
 class ATrackContext;
 class ADrawableContext;
+class AEntityContext;
 
 class AGatorContext {
     glm::vec2 mAppPosition;
@@ -24,7 +25,8 @@ class AGatorContext {
 
     std::shared_ptr<ANavContext> mNavContext;
     std::shared_ptr<ATrackContext> mTrackContext;
-    std::shared_ptr< ADrawableContext> mDrawableContext;
+    std::shared_ptr<ADrawableContext> mDrawableContext;
+    std::shared_ptr<AEntityContext> mEntityContext;
 
     int mSelectedNavmeshIndex = -1;
     int mSelectedPolygonIndex = 0;
@@ -38,6 +40,7 @@ class AGatorContext {
     void SaveTracksAsCB();
 
     void OpenFile(std::filesystem::path filePath);
+    void LoadWorldDirectory(std::filesystem::path directoryPath);
 
 public:
     AGatorContext();
@@ -54,4 +57,9 @@ public:
 
     void OnGLInitialized();
     void OnFileDropped(std::filesystem::path filePath);
+    
+    // Public method to load a world directory (drawables, navmeshes, entities, etc.)
+    void LoadWorldDir(std::filesystem::path directoryPath) {
+        LoadWorldDirectory(directoryPath);
+    }
 };

@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "D:/GitHub/NaviGator/build/_deps/glfw-subbuild/CMakeFiles/glfw-populate"
+		},
+		{
+			"file" : "D:/GitHub/NaviGator/build/_deps/glfw-subbuild/CMakeFiles/b69cad13f9798100211dffb0f4bc2664/glfw-populate.rule"
+		},
+		{
+			"file" : "D:/GitHub/NaviGator/build/_deps/glfw-subbuild/CMakeFiles/48374cb31f78ec958f6838e94c53ea54/glfw-populate-complete.rule"
+		},
+		{
+			"file" : "D:/GitHub/NaviGator/build/_deps/glfw-subbuild/CMakeFiles/caf8c17854d22303591f5542ae70183c/glfw-populate-build.rule"
+		},
+		{
+			"file" : "D:/GitHub/NaviGator/build/_deps/glfw-subbuild/CMakeFiles/caf8c17854d22303591f5542ae70183c/glfw-populate-configure.rule"
+		},
+		{
+			"file" : "D:/GitHub/NaviGator/build/_deps/glfw-subbuild/CMakeFiles/caf8c17854d22303591f5542ae70183c/glfw-populate-download.rule"
+		},
+		{
+			"file" : "D:/GitHub/NaviGator/build/_deps/glfw-subbuild/CMakeFiles/caf8c17854d22303591f5542ae70183c/glfw-populate-install.rule"
+		},
+		{
+			"file" : "D:/GitHub/NaviGator/build/_deps/glfw-subbuild/CMakeFiles/caf8c17854d22303591f5542ae70183c/glfw-populate-mkdir.rule"
+		},
+		{
+			"file" : "D:/GitHub/NaviGator/build/_deps/glfw-subbuild/CMakeFiles/caf8c17854d22303591f5542ae70183c/glfw-populate-patch.rule"
+		},
+		{
+			"file" : "D:/GitHub/NaviGator/build/_deps/glfw-subbuild/CMakeFiles/caf8c17854d22303591f5542ae70183c/glfw-populate-test.rule"
+		},
+		{
+			"file" : "D:/GitHub/NaviGator/build/_deps/glfw-subbuild/CMakeFiles/caf8c17854d22303591f5542ae70183c/glfw-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"glfw-populate"
+		],
+		"name" : "glfw-populate"
+	}
+}

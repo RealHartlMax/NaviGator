@@ -1,0 +1,18 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/GitHub/NaviGator/build/cmake_install.cmake",
+		"D:/GitHub/NaviGator/build/_deps/glfw-build/cmake_install.cmake",
+		"D:/GitHub/NaviGator/build/_deps/glfw-build/src/cmake_install.cmake",
+		"D:/GitHub/NaviGator/build/_deps/glfw-build/docs/cmake_install.cmake",
+		"D:/GitHub/NaviGator/build/_deps/magic_enum-build/cmake_install.cmake",
+		"D:/GitHub/NaviGator/build/lib/cmake_install.cmake",
+		"D:/GitHub/NaviGator/build/lib/ImGuiFileDialog/cmake_install.cmake",
+		"D:/GitHub/NaviGator/build/lib/glm/cmake_install.cmake",
+		"D:/GitHub/NaviGator/build/lib/glm/glm/cmake_install.cmake",
+		"D:/GitHub/NaviGator/build/lib/librdr3/cmake_install.cmake",
+		"D:/GitHub/NaviGator/build/lib/Recast/cmake_install.cmake",
+		"D:/GitHub/NaviGator/build/lib/pugixml/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

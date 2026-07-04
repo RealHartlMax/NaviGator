@@ -4,6 +4,7 @@
 #include "application/ANavContext.hpp"
 #include "application/ATrackContext.hpp"
 #include "application/ADrawableContext.hpp"
+#include "application/AEntityContext.hpp"
 
 #include "ui/UViewport.hpp"
 #include "ui/UViewportPicker.hpp"
@@ -14,6 +15,7 @@
 
 #include <util/bstream.h>
 
+#include <iostream>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <ImGuiFileDialog.h>
@@ -21,6 +23,7 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <limits>
+#include <set>
 
 namespace {
 	bool HasSavedLayout() {
@@ -139,7 +142,7 @@ namespace {
 
 AGatorContext::AGatorContext() : bIsDockingConfigured(false), mMainDockSpaceID(UINT32_MAX), mDockNodeTopID(UINT32_MAX),
 	mDockNodeRightID(UINT32_MAX), mDockNodeDownID(UINT32_MAX), mPropertiesDockNodeID(UINT32_MAX), mAppPosition({ 0, 0 }),
-	mNavContext(std::make_shared<ANavContext>()), mTrackContext(std::make_shared<ATrackContext>()), mDrawableContext(std::make_shared<ADrawableContext>()),
+	mNavContext(std::make_shared<ANavContext>()), mTrackContext(std::make_shared<ATrackContext>()), mDrawableContext(std::make_shared<ADrawableContext>()), mEntityContext(std::make_shared<AEntityContext>()),
 	mPropertiesPanelTopID(UINT32_MAX), mPropertiesPanelBottomID(UINT32_MAX)
 {
 	OPTIONS.Load();
@@ -177,11 +180,13 @@ void AGatorContext::SetUpDocking() {
 		mDockNodeDownID = UINT32_MAX;
 
 		if (useTinyLayout) {
-			mPropertiesDockNodeID = ImGui::DockBuilderSplitNode(mMainDockSpaceID, ImGuiDir_Down, 0.35f, nullptr, &mMainDockSpaceID);
+			// For tiny layout: Properties panel on bottom (25% height), viewport on top
+			mPropertiesDockNodeID = ImGui::DockBuilderSplitNode(mMainDockSpaceID, ImGuiDir_Down, 0.25f, nullptr, &mMainDockSpaceID);
 			mPropertiesPanelTopID = ImGui::DockBuilderSplitNode(mPropertiesDockNodeID, ImGuiDir_Left, 0.38f, nullptr, &mPropertiesPanelBottomID);
 		}
 		else {
-			const float propertiesWidthRatio = useCompactLayout ? 0.33f : 0.24f;
+			// For larger layouts: Properties panel on left (20% width), viewport on right
+			const float propertiesWidthRatio = useCompactLayout ? 0.20f : 0.18f;
 			const float propertiesHeightRatio = useCompactLayout ? 0.45f : 0.50f;
 
 			mPropertiesDockNodeID = ImGui::DockBuilderSplitNode(mMainDockSpaceID, ImGuiDir_Left, propertiesWidthRatio, nullptr, &mMainDockSpaceID);
@@ -212,6 +217,15 @@ void AGatorContext::RenderMenuBar() {
 			if (ImGui::MenuItem("Open...")) {
 				LoadFileCB();
 			}
+			if (ImGui::MenuItem("Load Game World...")) {
+				std::string startingDir = OPTIONS.mLastOpenedDir.empty() ? "." : OPTIONS.mLastOpenedDir.u8string();
+				ImGuiFileDialog::Instance()->OpenDialog("loadWorldDirDialog", "Select RDR2 Game Directory", nullptr, startingDir, 1, nullptr, ImGuiFileDialogFlags_Modal);
+			}
+			ImGui::Separator();
+			ImGui::TextDisabled("Load Game World: View navmeshes & drawables");
+			ImGui::TextDisabled("Then load your custom traintracks via Open");
+			ImGui::Separator();
+			
 			if (ImGui::BeginMenu("Railroad Data")) {
 				if (!mTrackContext->IsLoaded()) {
 					ImGui::BeginDisabled();
@@ -640,13 +654,27 @@ void AGatorContext::Render(float deltaTime) {
 
 		ImGuiFileDialog::Instance()->Close();
 	}
+
+	// Handle world directory loader
+	if (ImGuiFileDialog::Instance()->Display("loadWorldDirDialog", 32, dialogSize)) {
+		if (ImGuiFileDialog::Instance()->IsOk()) {
+			std::string selectedPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+			LoadWorldDirectory(selectedPath);
+		}
+
+		ImGuiFileDialog::Instance()->Close();
+	}
 }
 
 void AGatorContext::PostRender(float deltaTime) {
 	mMainViewport->BindViewport();
 
 	mNavContext->Render(mMainViewport->GetCamera());
+	mDrawableContext->Render(mMainViewport->GetCamera());
 	mTrackContext->Render(mMainViewport->GetCamera());
+	
+	// Render grid lines with Blender-style fade-out
+	mMainViewport->RenderGridLines();
 
 	mMainViewport->UnbindViewport();
 }
@@ -675,6 +703,14 @@ void AGatorContext::OpenFile(std::filesystem::path filePath) {
 			mTrackContext->InitGLResources();
 			mTrackContext->LoadTracks(filePath);
 
+			// Set track points in viewport for new panels (Hierarchy & Properties)
+			if (mTrackContext->IsLoaded() && mMainViewport) {
+				auto trackPoints = mTrackContext->GetAllTrackPoints();
+				if (!trackPoints.empty()) {
+					mMainViewport->SetTrackPoints(trackPoints);
+				}
+			}
+
 			OPTIONS.mLastOpenedDir = filePath;
 			OPTIONS.mLastOpenedRailroadDir = filePath.parent_path();
 		}
@@ -696,6 +732,155 @@ void AGatorContext::SaveTracksAsCB() {
 
 void AGatorContext::OnFileDropped(std::filesystem::path filePath) {
 	OpenFile(filePath);
+}
+
+void AGatorContext::LoadWorldDirectory(std::filesystem::path directoryPath) {
+	if (!std::filesystem::exists(directoryPath) || !std::filesystem::is_directory(directoryPath)) {
+		std::cerr << "Invalid directory: " << directoryPath << std::endl;
+		return;
+	}
+
+	std::cout << "\n=== Loading RDR2 World from: " << directoryPath << " ===" << std::endl;
+	
+	// 1. Recursively load all .ynv (navmesh) files
+	// Strategy: Look for .ynv.xml first (works with RSC8 native files), fall back to .ynv
+	std::cout << "\n[1/3] Searching for navmeshes (recursive)..." << std::endl;
+	int navmeshCount = 0;
+	std::set<std::string> loadedBasenames;  // Track which navmeshes we've already loaded
+	
+	for (const auto& entry : std::filesystem::recursive_directory_iterator(directoryPath)) {
+		if (entry.is_regular_file()) {
+			const auto& path = entry.path();
+			
+			// Prefer .ynv.xml files (these always work, even for RSC8 native files)
+			if (path.extension() == ".xml" && path.stem().extension() == ".ynv") {
+				std::string basename = path.stem().stem().string();  // e.g., "navmesh[123][456]"
+				if (loadedBasenames.find(basename) == loadedBasenames.end()) {
+					if (mNavContext->LoadNavmesh(path)) {
+						loadedBasenames.insert(basename);
+						navmeshCount++;
+						// Progress indicator every 50 files
+						if (navmeshCount % 50 == 0) {
+							std::cout << "  Progress: " << navmeshCount << " navmeshes loaded..." << std::endl;
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Fall back to native .ynv files only if no corresponding .ynv.xml exists
+	for (const auto& entry : std::filesystem::recursive_directory_iterator(directoryPath)) {
+		if (entry.is_regular_file()) {
+			const auto& path = entry.path();
+			
+			if (path.extension() == ".ynv") {
+				std::string basename = path.stem().string();  // e.g., "navmesh[123][456]"
+				if (loadedBasenames.find(basename) == loadedBasenames.end()) {
+					// Try native first, but silently skip if it fails
+					if (mNavContext->LoadNavmesh(path)) {
+						loadedBasenames.insert(basename);
+						navmeshCount++;
+					}
+				}
+			}
+		}
+	}
+	std::cout << "  Loaded " << navmeshCount << " navmesh(es)" << std::endl;
+	
+	// 2. Recursively load all .ydr (drawable/model) files with XML fallback
+	std::cout << "\n[2/3] Searching for drawables (recursive)..." << std::endl;
+	int drawableCount = 0;
+	std::set<std::string> loadedDrawables;  // Track loaded drawable basenames
+	
+	// First pass: collect all files to understand what we have
+	std::vector<std::filesystem::path> ydrXmlFiles;
+	std::vector<std::filesystem::path> ydrFiles;
+	
+	for (const auto& entry : std::filesystem::recursive_directory_iterator(directoryPath)) {
+		if (entry.is_regular_file()) {
+			const auto& path = entry.path();
+			
+			if (path.extension() == ".xml" && path.stem().extension() == ".ydr") {
+				ydrXmlFiles.push_back(path);
+			} else if (path.extension() == ".ydr") {
+				ydrFiles.push_back(path);
+			}
+		}
+	}
+	
+	std::cout << "  Found " << ydrXmlFiles.size() << " .ydr.xml files and " << ydrFiles.size() << " .ydr files" << std::endl;
+	
+	// Prefer .ydr.xml files
+	for (const auto& path : ydrXmlFiles) {
+		std::string basename = path.stem().stem().string();
+		if (loadedDrawables.find(basename) == loadedDrawables.end()) {
+			if (mDrawableContext->LoadDrawable(path)) {
+				loadedDrawables.insert(basename);
+				drawableCount++;
+				// Progress indicator every 20 files
+				if (drawableCount % 20 == 0) {
+					std::cout << "  Progress: " << drawableCount << " drawables loaded..." << std::endl;
+				}
+			} else {
+				// Log failures for debugging
+				if (drawableCount % 100 == 0) {
+					std::cerr << "  Failed to load: " << path.filename() << " - " << mDrawableContext->GetLastLoadError() << std::endl;
+				}
+			}
+		}
+	}
+	
+	// Fall back to native .ydr files
+	for (const auto& path : ydrFiles) {
+		std::string basename = path.stem().string();
+		if (loadedDrawables.find(basename) == loadedDrawables.end()) {
+			if (mDrawableContext->LoadDrawable(path)) {
+				loadedDrawables.insert(basename);
+				drawableCount++;
+				// Progress indicator every 20 files
+				if (drawableCount % 20 == 0) {
+					std::cout << "  Progress: " << drawableCount << " drawables loaded..." << std::endl;
+				}
+			}
+		}
+	}
+	std::cout << "  Loaded " << drawableCount << " drawable(s)" << std::endl;
+	
+	// 3. Recursively load all .ymap.xml (entity map) files
+	std::cout << "\n[3/4] Searching for entity maps (recursive)..." << std::endl;
+	int entityMapCount = 0;
+	for (const auto& entry : std::filesystem::recursive_directory_iterator(directoryPath)) {
+		if (entry.is_regular_file()) {
+			const auto& path = entry.path();
+			
+			if (path.extension() == ".xml" && path.stem().extension() == ".ymap") {
+				if (mEntityContext->LoadYmap(path)) {
+					entityMapCount++;
+					std::cout << "  Loaded: " << path.filename() << " (" << mEntityContext->GetLoadedEntityCount() << " entities)" << std::endl;
+				}
+			}
+		}
+	}
+	std::cout << "  Loaded " << entityMapCount << " entity map(s)" << std::endl;
+	
+	// 4. NOTE: Collision files (.ybn) are not yet supported
+	std::cout << "\n[4/4] Asset loading completed" << std::endl;
+	// Users load their own traintracks separately via File -> Open
+	std::cout << "NOTE: Custom traintracks not loaded (load separately via File -> Open)" << std::endl;
+	
+	// Save the directory path for future use
+	OPTIONS.mLastOpenedDir = directoryPath;
+	
+	// Auto-position camera to view loaded world assets
+	// Center of RDR2 region based on loaded navmesh tiles
+	glm::vec3 worldCenter(245.0f, 235.0f, 100.0f);  // Approximate center of navmesh tiles (192-300 X, 210-260 Y)
+	glm::vec3 cameraPos = worldCenter + glm::vec3(150.0f, 150.0f, 150.0f);  // ~212 units away at 45° angle
+	mMainViewport->GetCamera().SetView(cameraPos, worldCenter, glm::vec3(0.0f, 1.0f, 0.0f));
+	
+	std::cout << "\n=== World assets loaded successfully! ===" << std::endl;
+	std::cout << "Total: " << navmeshCount << " navmeshes + " << drawableCount << " drawables + " << mEntityContext->GetLoadedEntityCount() << " entities" << std::endl;
+	std::cout << "Ready to load your custom traintracks via File -> Open\n" << std::endl;
 }
 
 void AGatorContext::OnGLInitialized() {

@@ -1,0 +1,2 @@
+=== NaviGator debug session ===
+Working directory: D:\GitHub\NaviGator
